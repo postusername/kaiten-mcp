@@ -30,7 +30,7 @@ Obtain your token: Kaiten → Profile → Settings → API Keys → Generate.
 
 ### Claude Code (recommended)
 
-Register the server in your project's `.claude/mcp.json`:
+**Project scope** — create `.mcp.json` in your project root (not inside `.claude/`):
 
 ```json
 {
@@ -47,16 +47,23 @@ Register the server in your project's `.claude/mcp.json`:
 }
 ```
 
-Or register globally via Claude Code CLI:
+Then approve it in Claude Code (shown as ⏸ Pending on first run) or pre-approve via:
+
+```bash
+claude mcp get kaiten
+```
+
+**User scope** — available across all projects:
 
 ```bash
 claude mcp add kaiten \
-  --command "node /absolute/path/to/kaiten-mcp/index.js" \
-  --env KAITEN_TOKEN=your_token \
-  --env KAITEN_DOMAIN=yourcompany
+  -s user \
+  -e KAITEN_TOKEN=your_token \
+  -e KAITEN_DOMAIN=yourcompany \
+  -- node /absolute/path/to/kaiten-mcp/index.js
 ```
 
-After registration, all `kaiten_*` tools are available in every Claude Code conversation.
+After registration, all `kaiten_*` tools are available in Claude Code conversations.
 
 ### Stdio smoke test
 
