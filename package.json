@@ -1,0 +1,17 @@
+{
+  "name": "kaiten-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Kaiten project management API",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["kaiten", "mcp", "project-management"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
