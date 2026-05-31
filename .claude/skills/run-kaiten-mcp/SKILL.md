@@ -58,23 +58,13 @@ The driver script at `.claude/skills/run-kaiten-mcp/smoke.sh` automates these ch
 
 ---
 
-## Run (Claude Code integration) — recommended
+## Run (Claude Code — this folder)
 
-Register the server in your project's `.claude/mcp.json`:
+When this `kaiten-mcp` folder is opened in Claude Code, the included `.mcp.json` auto-registers the server via `node index.js` (stdio). Just export the two env vars before opening:
 
-```json
-{
-  "mcpServers": {
-    "kaiten": {
-      "command": "node",
-      "args": ["/absolute/path/to/kaiten-mcp/index.js"],
-      "env": {
-        "KAITEN_TOKEN": "your_api_token_here",
-        "KAITEN_DOMAIN": "yourcompany"
-      }
-    }
-  }
-}
+```bash
+export KAITEN_TOKEN=your_token
+export KAITEN_DOMAIN=yourcompany
 ```
 
 Or register globally via Claude Code CLI:
@@ -86,7 +76,21 @@ claude mcp add kaiten \
   --env KAITEN_DOMAIN=yourcompany
 ```
 
-After registration, all `kaiten_*` tools are available in every Claude Code conversation.
+## Run (Docker — HTTP/SSE transport)
+
+For containerised use, set `MCP_HTTP_PORT` to start in SSE mode instead of stdio:
+
+```bash
+docker build -t kaiten-mcp .
+docker run --rm -p 3000:3000 \
+  -e KAITEN_TOKEN=your_token \
+  -e KAITEN_DOMAIN=yourcompany \
+  -e MCP_HTTP_PORT=3000 \
+  kaiten-mcp
+# SSE endpoint: http://localhost:3000/sse
+```
+
+If you use **aura-rag**, kaiten-mcp is already included in its `docker-compose.yml` — `docker compose up -d` starts both servers. Opening the aura-rag project connects Claude Code to both automatically.
 
 ---
 

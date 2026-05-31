@@ -28,9 +28,20 @@ Obtain your token: Kaiten → Profile → Settings → API Keys → Generate.
 
 ## Usage
 
-### Claude Code (recommended)
+### Claude Code — standalone (recommended for this repo)
 
-**Project scope** — create `.mcp.json` in your project root (not inside `.claude/`):
+When you open the `kaiten-mcp` folder directly, Claude Code auto-loads `.mcp.json` and starts the server via `node index.js`. Just set the two environment variables and approve the server on first run.
+
+Export the variables before launching Claude Code:
+
+```bash
+export KAITEN_TOKEN=your_api_token_here
+export KAITEN_DOMAIN=yourcompany   # subdomain only, without .kaiten.ru
+```
+
+Or place them in a `.env` file and run `source .env` first.
+
+**Manual project-scope registration** — create `.mcp.json` in your project root:
 
 ```json
 {
@@ -47,12 +58,6 @@ Obtain your token: Kaiten → Profile → Settings → API Keys → Generate.
 }
 ```
 
-Then approve it in Claude Code (shown as ⏸ Pending on first run) or pre-approve via:
-
-```bash
-claude mcp get kaiten
-```
-
 **User scope** — available across all projects:
 
 ```bash
@@ -64,6 +69,23 @@ claude mcp add kaiten \
 ```
 
 After registration, all `kaiten_*` tools are available in Claude Code conversations.
+
+### Docker — HTTP/SSE transport
+
+The server supports an HTTP/SSE transport mode for use in containerised environments. Set `MCP_HTTP_PORT` to start it as an SSE server instead of stdio:
+
+```bash
+docker build -t kaiten-mcp .
+docker run --rm -p 3000:3000 \
+  -e KAITEN_TOKEN=your_token \
+  -e KAITEN_DOMAIN=yourcompany \
+  -e MCP_HTTP_PORT=3000 \
+  kaiten-mcp
+```
+
+The SSE endpoint is then available at `http://localhost:3000/sse`.
+
+**Note:** if you are using [aura-rag](https://github.com/postusername/aura-rag), kaiten-mcp is already included as a service in its `docker-compose.yml`. Run `docker compose up -d` in the aura-rag directory — no need to start kaiten-mcp separately. Both MCP servers (kaiten + rag) are registered automatically when you open the aura-rag project.
 
 ### Stdio smoke test
 

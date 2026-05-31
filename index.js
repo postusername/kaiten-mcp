@@ -1002,32 +1002,57 @@ async function handleTool(name, args) {
   }
 }
 
-const server = new Server(
-  { name: "kaiten-mcp", version: "1.0.0" },
-  { capabilities: { tools: {} } }
-);
+function createServer() {
+  const s = new Server(
+    { name: "kaiten-mcp", version: "1.0.0" },
+    { capabilities: { tools: {} } }
+  );
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    try {
+      const result = await handleTool(name, args ?? {});
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  });
+  return s;
+}
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+const httpPort = process.env.MCP_HTTP_PORT ? parseInt(process.env.MCP_HTTP_PORT) : null;
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  try {
-    const result = await handleTool(name, args ?? {});
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
-  } catch (err) {
-    return {
-      content: [{ type: "text", text: `Error: ${err.message}` }],
-      isError: true,
-    };
-  }
-});
+if (httpPort) {
+  const { default: express } = await import("express");
+  const { SSEServerTransport } = await import("@modelcontextprotocol/sdk/server/sse.js");
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  const app = express();
+  app.use(express.json());
+
+  const sessions = new Map();
+
+  app.get("/sse", async (req, res) => {
+    const transport = new SSEServerTransport("/message", res);
+    const server = createServer();
+    sessions.set(transport.sessionId, { transport, server });
+    res.on("close", () => sessions.delete(transport.sessionId));
+    await server.connect(transport);
+  });
+
+  app.post("/message", async (req, res) => {
+    const { transport } = sessions.get(req.query.sessionId) ?? {};
+    if (transport) {
+      await transport.handlePostMessage(req, res, req.body);
+    } else {
+      res.status(404).json({ error: "Session not found" });
+    }
+  });
+
+  app.listen(httpPort, () =>
+    console.error(`[kaiten-mcp] HTTP/SSE listening on :${httpPort}`)
+  );
+} else {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
