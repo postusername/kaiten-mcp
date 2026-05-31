@@ -38,6 +38,194 @@ async function kaitenRequest(method, path, body) {
   return text ? JSON.parse(text) : null;
 }
 
+// ───── Markdown → Kaiten ProseMirror converter ─────
+// Kaiten stores document body in `data` as ProseMirror JSON with a custom schema:
+//   headings: heading2 (md #/##) / heading3 (md ###+), attrs {textAlign, id}
+//   paragraph attrs {textAlign}; marks: strong, em, code, link({href})
+//   table(size:fixed) > table_row > table_header|table_cell(colspan/rowspan) > paragraph
+//   bullet_list > list_item > paragraph; blockquote > paragraph
+//   horizontal_rule; code_block attrs {language, lineNumbers}
+function mdSlug(text) {
+  return (
+    String(text).trim().toLowerCase().replace(/\s+/g, "-").replace(/[^0-9a-zа-яё._-]/gi, "") +
+    "-" +
+    Math.floor(Math.random() * 1e8)
+  );
+}
+
+function mdTextNode(text, marks) {
+  const n = { type: "text", text };
+  if (marks && marks.length) n.marks = marks;
+  return n;
+}
+
+function mdParseInline(text, marks = []) {
+  if (!text) return [];
+  const patterns = [
+    { kind: "code", re: /`([^`]+)`/ },
+    { kind: "strong", re: /\*\*([^*]+)\*\*/ },
+    { kind: "strong", re: /__([^_]+)__/ },
+    { kind: "em", re: /\*([^*]+)\*/ },
+    { kind: "em", re: /(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9])/ },
+    { kind: "link", re: /\[([^\]]+)\]\(([^)]+)\)/ },
+  ];
+  let best = null;
+  for (const p of patterns) {
+    const m = p.re.exec(text);
+    if (m && (!best || m.index < best.m.index)) best = { p, m };
+  }
+  if (!best) return [mdTextNode(text, marks.length ? marks : undefined)];
+  const { p, m } = best;
+  const before = text.slice(0, m.index);
+  const after = text.slice(m.index + m[0].length);
+  let mid;
+  if (p.kind === "code") {
+    mid = [mdTextNode(m[1], marks.concat([{ type: "code", attrs: {} }]))];
+  } else if (p.kind === "link") {
+    mid = [mdTextNode(m[1], marks.concat([{ type: "link", attrs: { href: m[2] } }]))];
+  } else {
+    mid = mdParseInline(m[1], marks.concat([{ type: p.kind, attrs: {} }]));
+  }
+  return [
+    ...(before ? mdParseInline(before, marks) : []),
+    ...mid,
+    ...(after ? mdParseInline(after, marks) : []),
+  ];
+}
+
+function mdParagraph(text) {
+  return { type: "paragraph", attrs: { textAlign: "left" }, content: mdParseInline(text) };
+}
+
+function mdTableCell(text, header) {
+  return {
+    type: header ? "table_header" : "table_cell",
+    attrs: { colspan: 1, rowspan: 1 },
+    content: [mdParagraph(text.trim())],
+  };
+}
+
+function mdSplitRow(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  const cells = [];
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; }
+    else if (s[i] === "|") { cells.push(cur); cur = ""; }
+    else cur += s[i];
+  }
+  cells.push(cur);
+  return cells;
+}
+
+const MD_TABLE_SEP = /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/;
+
+function markdownToKaitenDoc(md) {
+  const lines = String(md).replace(/\r\n/g, "\n").split("\n");
+  const content = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.trim() === "") { i++; continue; }
+
+    // fenced code block
+    const fence = line.match(/^\s*```(.*)$/);
+    if (fence) {
+      const language = fence[1].trim() || null;
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // closing fence
+      content.push({
+        type: "code_block",
+        attrs: { language, lineNumbers: false },
+        content: buf.length ? [{ type: "text", text: buf.join("\n") }] : [],
+      });
+      continue;
+    }
+
+    // horizontal rule
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      content.push({ type: "horizontal_rule" });
+      i++;
+      continue;
+    }
+
+    // heading
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      const type = level <= 2 ? "heading2" : "heading3";
+      const text = h[2].trim();
+      content.push({ type, attrs: { textAlign: "left", id: mdSlug(text) }, content: mdParseInline(text) });
+      i++;
+      continue;
+    }
+
+    // table
+    if (line.includes("|") && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1])) {
+      const header = mdSplitRow(line);
+      i += 2;
+      const rows = [
+        { type: "table_row", content: header.map((c) => mdTableCell(c, true)) },
+      ];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        const cells = mdSplitRow(lines[i]);
+        rows.push({ type: "table_row", content: cells.map((c) => mdTableCell(c, false)) });
+        i++;
+      }
+      content.push({ type: "table", attrs: { size: "fixed" }, content: rows });
+      continue;
+    }
+
+    // blockquote
+    if (/^\s*>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      content.push({ type: "blockquote", content: [mdParagraph(buf.join(" ").trim())] });
+      continue;
+    }
+
+    // bullet / ordered list (both rendered as bullet_list to stay within known schema)
+    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+        const text = lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, "");
+        items.push({ type: "list_item", content: [mdParagraph(text)] });
+        i++;
+      }
+      content.push({ type: "bullet_list", content: items });
+      continue;
+    }
+
+    // paragraph (gather consecutive non-blank, non-block lines)
+    const buf = [line];
+    i++;
+    while (
+      i < lines.length &&
+      lines[i].trim() !== "" &&
+      !/^\s*```/.test(lines[i]) &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^\s*>/.test(lines[i]) &&
+      !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) &&
+      !/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(lines[i]) &&
+      !(lines[i].includes("|") && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1]))
+    ) {
+      buf.push(lines[i]);
+      i++;
+    }
+    content.push(mdParagraph(buf.join(" ")));
+  }
+
+  return { type: "doc", content: content.length ? content : [{ type: "paragraph", attrs: { textAlign: "left" } }] };
+}
+
 const tools = [
   // ───── AUTH / CURRENT USER ─────
   {
@@ -618,13 +806,15 @@ const tools = [
   },
   {
     name: "kaiten_create_document",
-    description: "Create a new document in a space",
+    description:
+      "Create a new document in a space. If `content` (markdown) is provided, the body is set via a follow-up update (markdown is converted to Kaiten ProseMirror JSON: headings, paragraphs, tables, lists, blockquotes, code blocks, bold/italic/code/links).",
     inputSchema: {
       type: "object",
       properties: {
         space_id: { type: "number", description: "Space ID" },
         title: { type: "string", description: "Document title" },
-        content: { type: "string", description: "Document content (markdown)" },
+        content: { type: "string", description: "Document body in Markdown (converted to ProseMirror automatically)" },
+        sort_order: { type: "number", description: "Position (optional, defaults to 1)" },
         group_id: { type: "number", description: "Document group ID (optional)" },
       },
       required: ["space_id", "title"],
@@ -632,13 +822,14 @@ const tools = [
   },
   {
     name: "kaiten_update_document",
-    description: "Update a document's title or content",
+    description:
+      "Update a document's title and/or body. `content` is Markdown and is converted to Kaiten ProseMirror JSON (headings, paragraphs, tables, lists, blockquotes, code blocks, bold/italic/code/links) and written to the `data` field.",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "number", description: "Document ID" },
-        title: { type: "string" },
-        content: { type: "string" },
+        title: { type: "string", description: "New document title (optional)" },
+        content: { type: "string", description: "New document body in Markdown (optional, replaces existing body)" },
       },
       required: ["id"],
     },
@@ -947,10 +1138,27 @@ async function handleTool(name, args) {
     }
     case "kaiten_get_document":
       return kaitenRequest("GET", `/documents/${args.id}`);
-    case "kaiten_create_document":
-      return kaitenRequest("POST", "/documents", args);
+    case "kaiten_create_document": {
+      const { content, ...createArgs } = args;
+      if (createArgs.sort_order == null) createArgs.sort_order = 1;
+      // Create endpoint cannot set body — only title/sort_order/parent. Body is
+      // set in a follow-up update with `data` (ProseMirror JSON).
+      const doc = await kaitenRequest("POST", "/documents", createArgs);
+      if (content && content.trim()) {
+        return kaitenRequest("PATCH", `/documents/${doc.id}`, {
+          sort_order: doc.sort_order ?? createArgs.sort_order,
+          data: markdownToKaitenDoc(content),
+        });
+      }
+      return doc;
+    }
     case "kaiten_update_document": {
-      const { id, ...body } = args;
+      const { id, content, ...body } = args;
+      if (content != null) body.data = markdownToKaitenDoc(content);
+      if (body.sort_order == null) {
+        const cur = await kaitenRequest("GET", `/documents/${id}`);
+        body.sort_order = cur.sort_order ?? 1;
+      }
       return kaitenRequest("PATCH", `/documents/${id}`, body);
     }
     case "kaiten_delete_document":
