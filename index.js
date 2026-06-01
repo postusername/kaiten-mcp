@@ -844,6 +844,50 @@ const tools = [
     },
   },
 
+  // ───── DOCUMENT CONVERSATIONS (inline comments / annotations) ─────
+  {
+    name: "kaiten_list_document_conversations",
+    description:
+      "List inline comment threads (conversations) on a document. Each conversation is anchored to a text fragment via `block_uid` (matches an `annotation` mark id in the document body) and contains one or more messages. Use to read review comments left on a document.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "Document ID/uid" },
+        resolved: { type: "boolean", description: "Filter by resolved state (optional; omit for all)" },
+        limit: { type: "number", description: "Max threads to return (default 100)" },
+        offset: { type: "number", description: "Pagination offset (default 0)" },
+      },
+      required: ["document_id"],
+    },
+  },
+  {
+    name: "kaiten_resolve_document_conversation",
+    description:
+      "Resolve or unresolve a document comment thread (conversation). Use after addressing a review comment to mark it resolved.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "Document ID/uid" },
+        conversation_id: { type: "string", description: "Conversation uid (from list_document_conversations)" },
+        resolved: { type: "boolean", description: "true to resolve (default), false to reopen" },
+      },
+      required: ["document_id", "conversation_id"],
+    },
+  },
+  {
+    name: "kaiten_add_document_conversation_message",
+    description: "Add a reply message to an existing document comment thread (conversation).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "Document ID/uid" },
+        conversation_id: { type: "string", description: "Conversation uid" },
+        text: { type: "string", description: "Message text" },
+      },
+      required: ["document_id", "conversation_id", "text"],
+    },
+  },
+
   // ───── DOCUMENT GROUPS ─────
   {
     name: "kaiten_list_document_groups",
@@ -1163,6 +1207,30 @@ async function handleTool(name, args) {
     }
     case "kaiten_delete_document":
       return kaitenRequest("DELETE", `/documents/${args.id}`);
+
+    // ── Document Conversations (inline comments) ──
+    case "kaiten_list_document_conversations": {
+      const params = new URLSearchParams();
+      if (args.resolved != null) params.set("resolved", String(args.resolved));
+      params.set("limit", String(args.limit ?? 100));
+      params.set("offset", String(args.offset ?? 0));
+      return kaitenRequest(
+        "GET",
+        `/documents/${args.document_id}/conversations?${params}`
+      );
+    }
+    case "kaiten_resolve_document_conversation":
+      return kaitenRequest(
+        "PATCH",
+        `/documents/${args.document_id}/conversations/${args.conversation_id}`,
+        { resolved: args.resolved ?? true }
+      );
+    case "kaiten_add_document_conversation_message":
+      return kaitenRequest(
+        "POST",
+        `/documents/${args.document_id}/conversations/${args.conversation_id}/messages`,
+        { text: args.text }
+      );
 
     // ── Document Groups ──
     case "kaiten_list_document_groups":
