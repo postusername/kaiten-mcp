@@ -45,6 +45,14 @@ async function kaitenRequest(method, path, body) {
 //   table(size:fixed) > table_row > table_header|table_cell(colspan/rowspan) > paragraph
 //   bullet_list > list_item > paragraph; blockquote > paragraph
 //   horizontal_rule; code_block attrs {language, lineNumbers}
+function mdUuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 function mdSlug(text) {
   return (
     String(text).trim().toLowerCase().replace(/\s+/g, "-").replace(/[^0-9a-zа-яё._-]/gi, "") +
@@ -154,6 +162,17 @@ function markdownToKaitenDoc(md) {
       continue;
     }
 
+    // standalone image: ![alt](src)
+    const img = line.match(/^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$/);
+    if (img) {
+      content.push({
+        type: "image",
+        attrs: { id: mdUuid(), src: img[2], alt: img[1] || null, title: null },
+      });
+      i++;
+      continue;
+    }
+
     // heading
     const h = line.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
@@ -215,6 +234,7 @@ function markdownToKaitenDoc(md) {
       !/^\s*>/.test(lines[i]) &&
       !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) &&
       !/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(lines[i]) &&
+      !/^\s*!\[[^\]]*\]\([^)]+\)\s*$/.test(lines[i]) &&
       !(lines[i].includes("|") && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1]))
     ) {
       buf.push(lines[i]);
@@ -844,6 +864,23 @@ const tools = [
     },
   },
 
+  {
+    name: "kaiten_upload_document_image",
+    description:
+      "Upload an image into a document and get back its `src` URL. Provide either `image_url` (fetched and re-uploaded) or `base64` data. Use the returned `src` in Markdown as ![alt](src) when calling create/update_document to embed a real image (e.g. a rendered diagram).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "Document ID/uid the image belongs to" },
+        image_url: { type: "string", description: "URL to fetch the image from (e.g. a rendered diagram)" },
+        base64: { type: "string", description: "Base64-encoded image data (alternative to image_url)" },
+        filename: { type: "string", description: "File name (optional, default image.png)" },
+        content_type: { type: "string", description: "MIME type (optional, default image/png)" },
+      },
+      required: ["document_id"],
+    },
+  },
+
   // ───── DOCUMENT CONVERSATIONS (inline comments / annotations) ─────
   {
     name: "kaiten_list_document_conversations",
@@ -1207,6 +1244,30 @@ async function handleTool(name, args) {
     }
     case "kaiten_delete_document":
       return kaitenRequest("DELETE", `/documents/${args.id}`);
+
+    case "kaiten_upload_document_image": {
+      let bytes;
+      if (args.base64) {
+        bytes = Buffer.from(args.base64, "base64");
+      } else if (args.image_url) {
+        const r = await fetch(args.image_url);
+        if (!r.ok) throw new Error(`Failed to fetch image_url → ${r.status}`);
+        bytes = Buffer.from(await r.arrayBuffer());
+      } else {
+        throw new Error("Provide either image_url or base64");
+      }
+      const ct = args.content_type || "image/png";
+      const fd = new FormData();
+      fd.append("file", new Blob([bytes], { type: ct }), args.filename || "image.png");
+      const res = await fetch(`${BASE_URL}/documents/${args.document_id}/files`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KAITEN_TOKEN}` },
+        body: fd,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`Kaiten upload → ${res.status}: ${text}`);
+      return text ? JSON.parse(text) : null;
+    }
 
     // ── Document Conversations (inline comments) ──
     case "kaiten_list_document_conversations": {
