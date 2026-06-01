@@ -1,6 +1,6 @@
 ---
 name: run-kaiten-mcp
-description: Run, configure, and test the Kaiten MCP server. Use this skill to start the server, call Kaiten API tools, debug connections, or add to Claude Code MCP config.
+description: Run, configure, and test the Kaiten MCP server. Use for starting the server, calling Kaiten API tools, editing documents via markdown, debugging connections, or Claude Code MCP config.
 ---
 
 # Kaiten MCP Server
@@ -179,6 +179,90 @@ If you use **aura-rag**, kaiten-mcp is already included in its `docker-compose.y
 - **Card move vs update**: `kaiten_move_card` and `kaiten_update_card` both PATCH `/cards/{id}` — they're the same endpoint. `move_card` is a named alias for clarity.
 - **Token expiry**: Kaiten API tokens do not expire by default but can be revoked from the profile page.
 - **ESM only**: `package.json` uses `"type": "module"`. Do not use `require()`.
+- **Document `id` is a UUID string** (`e164d68e-…`), not a numeric id — older tool schemas said `number`, API accepts uid.
+
+---
+
+## Editing Kaiten documents (agent playbook)
+
+Lessons from production edits (large specs, PDF sync, glossary passes).
+
+### Find the document
+
+| Approach | When |
+|---|---|
+| `kaiten_list_documents` → `kaiten_get_document` | **Preferred** — always works for docs you have access to |
+| `rag_query` | Only if doc is indexed in RAG; **new/recent docs often missing** |
+
+Do not assume RAG found the canonical doc. Title search in `kaiten_list_documents` is reliable.
+
+### Before writing anything
+
+1. **`kaiten_get_document`** — mandatory. Save `data`, `sort_order`, `updated`.
+2. **Never blind full-replace** from an old draft, plan, or memory — the live doc may have manual edits (shorter §10, glossary tweaks, inline comments).
+3. For partial updates: extract unchanged sections from current `data` (GET → markdown or ProseMirror walk), patch only target §, merge, then upload.
+
+### `kaiten_update_document` behaviour
+
+- `content` **replaces the entire body** — no section-level PATCH.
+- Markdown is converted to ProseMirror JSON via `markdownToKaitenDoc` (lossy round-trip).
+- Tool auto-preserves `sort_order` from GET if you omit it; still GET first.
+- Embedded images: keep existing `![alt](https://files/<doc-uid>/…)` URLs on their own line, or re-upload via `kaiten_upload_document_image`.
+
+### Inline annotations (review comments)
+
+Kaiten stores review anchors as ProseMirror **`annotation` marks** on text nodes. **`kaiten_update_document` drops them** on markdown conversion.
+
+**After every body replace:**
+
+1. Keep `oldPm = JSON.parse(doc.data)` from GET **before** PATCH.
+2. Convert markdown → `newPm`.
+3. Run `restoreAnnotations(oldPm, newPm)` from `lib/restore-annotations.js` (match by **exact** annotated text).
+4. PATCH `{ data: newPm, sort_order }`.
+5. Verify: `doc.data` still contains `"annotation"`.
+
+**CLI (recommended for large docs):**
+
+```bash
+cd kaiten-mcp
+source ../.env   # KAITEN_TOKEN, KAITEN_DOMAIN
+node scripts/update-document-from-markdown.mjs <doc-uuid> path/to/merged.md
+```
+
+Prints `{ annotations_restored: N }`. If `N === 0` but comments existed, annotated text changed — restore manually in UI or fix matching strings.
+
+Read threads: `kaiten_list_document_conversations` (`block_uid` ↔ annotation mark `id`).
+
+### Markdown converter limits
+
+Avoid constructs that render badly or break tables:
+
+| OK | Avoid |
+|---|---|
+| `##` / `###` headings | `#` alone (mapped to heading2 anyway) |
+| `**bold**`, `*em*`, `` `code` `` | Nested `**bold with *em* inside**` in table cells |
+| `![alt](url)` on its own line | Inline images mid-paragraph |
+| `\|` escaped in tables | Unescaped `\|` in cell text |
+| One blank line between blocks | `**Label **`**`params.txt`**`**` style double-bold |
+
+### Safe edit workflow (checklist)
+
+```
+GET document
+  → note manual diffs vs your draft
+  → save oldPm for annotations
+Edit markdown (merged full body OR section patch)
+  → preserve image URLs from GET
+  → grep glossary terms used ≥2× in body
+update-document-from-markdown.mjs  (or MCP + manual restoreAnnotations)
+  → verify key strings (e.g. table_height_cm, examples)
+  → verify annotations_restored > 0 if doc had comments
+Optional: rag_sync if doc is in RAG domain
+```
+
+### Glossary / terminology passes
+
+If the doc has §2 glossary: terms must appear in body, not only in tables. Replace repeated long phrases (`params.txt` everywhere) with the glossary term where it clarifies — keep `params.txt` in format/code sections.
 
 ---
 
@@ -198,3 +282,15 @@ If you use **aura-rag**, kaiten-mcp is already included in its `docker-compose.y
 
 **Server exits immediately with no output**
 → No JSON-RPC input on stdin. The server waits for stdin — pipe messages to it.
+
+**Document update dropped inline comments / yellow highlights**
+→ Expected with markdown-only `kaiten_update_document`. Use `scripts/update-document-from-markdown.mjs` or call `restoreAnnotations` after conversion.
+
+**`annotations_restored: 0` but doc had comments**
+→ Annotated phrase text changed in edit (e.g. removed «⚠️ уточнить…»). Re-add comments in Kaiten UI or keep anchor text identical.
+
+**Large markdown fails via MCP tool**
+→ Use CLI script with `.env` instead of inline MCP payload.
+
+**Accidentally wiped a document while testing the update script**
+→ Script replaces full body — never test with `# test` on a production uid. Restore from prior GET backup or Kaiten version history; re-apply `restoreAnnotations` from a JSON snapshot that still has `annotation` marks.
