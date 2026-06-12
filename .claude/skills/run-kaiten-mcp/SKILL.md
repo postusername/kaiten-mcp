@@ -294,3 +294,9 @@ If the doc has §2 glossary: terms must appear in body, not only in tables. Repl
 
 **Accidentally wiped a document while testing the update script**
 → Script replaces full body — never test with `# test` on a production uid. Restore from prior GET backup or Kaiten version history; re-apply `restoreAnnotations` from a JSON snapshot that still has `annotation` marks.
+
+**Document body duplicated (2×/3× copies of all content) after API edits**
+→ The document was open in the Kaiten UI: the collab-editor session periodically saves its stale state on top of REST PATCHes, concatenating full copies (e.g. 174 → 348 → 522 blocks). **Always have the document closed in the UI before editing `data` via API.** To repair: GET, slice `content` to the latest full copy (it carries the newest annotation marks), PATCH it back, then re-GET ~2 min later to confirm the block count stays put before making further edits.
+
+**Annotation marks rejected on a never-commented document (500 or silently stripped)**
+→ Kaiten only accepts new `annotation` marks via REST on documents that already contain at least one. Seed the first inline comment in the Kaiten UI, then `kaiten_create_document_conversation` works.

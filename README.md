@@ -187,6 +187,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kaiten_lis
 - **ESM only**: `package.json` uses `"type": "module"` — do not use `require()`
 - **Token expiry**: tokens do not expire by default but can be revoked from the profile page
 - **Inline comments on fresh documents**: Kaiten rejects `annotation` marks added via API to documents that have never had inline comments (500 or silent strip). `kaiten_create_document_conversation` detects this and fails with a hint — add one comment in the Kaiten UI first, after that the API path works
+- **Close the document in the Kaiten UI before editing via API**: an open collab-editor session periodically saves its own stale state on top of REST changes, concatenating duplicate copies of the entire body (174 blocks → 348 → 522). If a document doubles, the latest full copy is usually the last one — restore by PATCHing `data` with only that slice
 
 ## License
 
