@@ -1,6 +1,6 @@
 # kaiten-mcp
 
-A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the full [Kaiten](https://kaiten.ru) project management API as **61 callable tools** — spaces, boards, cards, documents, users, sprints, and more.
+A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes the full [Kaiten](https://kaiten.ru) project management API as **66 callable tools** — spaces, boards, cards, documents, users, sprints, and more.
 
 ## Requirements
 
@@ -90,7 +90,7 @@ The SSE endpoint is then available at `http://localhost:3000/sse`.
 ### Stdio smoke test
 
 ```bash
-# List all 61 available tools
+# List all 66 available tools
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
   | KAITEN_TOKEN=your_token KAITEN_DOMAIN=yourcompany node index.js \
   | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(len(d['result']['tools']), 'tools')"
@@ -104,7 +104,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kaiten_lis
   | KAITEN_TOKEN=your_token KAITEN_DOMAIN=yourcompany node index.js
 ```
 
-## Available Tools (61 total)
+## Available Tools (66 total)
 
 ### Authentication
 - `kaiten_get_current_user` — verify token, get own profile
@@ -151,7 +151,14 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kaiten_lis
 
 ### Documents
 - `kaiten_list_documents` / `kaiten_get_document` / `kaiten_create_document` / `kaiten_update_document` / `kaiten_delete_document`
+- `kaiten_upload_document_image` — upload an image and get its `src` URL for embedding
 - `kaiten_list_document_groups` / `kaiten_create_document_group`
+
+### Document Conversations (inline comments)
+- `kaiten_list_document_conversations` — list comment threads anchored to text fragments
+- `kaiten_create_document_conversation` — start a new thread: anchors an `annotation` mark to an exact text fragment (highlighted in Kaiten UI) and posts the first message
+- `kaiten_add_document_conversation_message` — reply to an existing thread
+- `kaiten_resolve_document_conversation` — resolve or reopen a thread
 
 ### Users
 - `kaiten_list_users` / `kaiten_get_user`
@@ -179,6 +186,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kaiten_lis
 - **Rate limit**: 5 req/s — add delays between bulk operations to avoid 429 errors
 - **ESM only**: `package.json` uses `"type": "module"` — do not use `require()`
 - **Token expiry**: tokens do not expire by default but can be revoked from the profile page
+- **Inline comments on fresh documents**: Kaiten rejects `annotation` marks added via API to documents that have never had inline comments (500 or silent strip). `kaiten_create_document_conversation` detects this and fails with a hint — add one comment in the Kaiten UI first, after that the API path works
 
 ## License
 

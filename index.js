@@ -5,7 +5,9 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { markdownToKaitenDoc } from "./lib/markdown-to-kaiten.js";
+import { addAnnotation } from "./lib/restore-annotations.js";
 
 const KAITEN_TOKEN = process.env.KAITEN_TOKEN;
 const KAITEN_DOMAIN = process.env.KAITEN_DOMAIN;
@@ -717,6 +719,24 @@ const tools = [
       required: ["document_id", "conversation_id", "text"],
     },
   },
+  {
+    name: "kaiten_create_document_conversation",
+    description:
+      "Start a new inline comment thread on a document, anchored to a text fragment. " +
+      "Inserts an `annotation` mark on the first occurrence of `anchor_text` in the document body " +
+      "(the fragment gets highlighted in Kaiten UI) and opens a conversation with `text` as the first message. " +
+      "`anchor_text` must match the document text exactly and not cross inline-formatting boundaries " +
+      "(bold/code runs are separate text nodes — anchor within a single run).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "Document ID/uid" },
+        anchor_text: { type: "string", description: "Exact text fragment to anchor the comment to" },
+        text: { type: "string", description: "First message of the thread" },
+      },
+      required: ["document_id", "anchor_text", "text"],
+    },
+  },
 
   // ───── DOCUMENT GROUPS ─────
   {
@@ -1085,6 +1105,42 @@ async function handleTool(name, args) {
         `/documents/${args.document_id}/conversations/${args.conversation_id}/messages`,
         { text: args.text }
       );
+    case "kaiten_create_document_conversation": {
+      const doc = await kaitenRequest("GET", `/documents/${args.document_id}`);
+      const pm = typeof doc.data === "string" ? JSON.parse(doc.data) : doc.data;
+      const annId = randomUUID();
+      if (!addAnnotation(pm, args.anchor_text, annId)) {
+        throw new Error(
+          `anchor_text not found in document body (must match exactly within a single ` +
+          `inline-formatting run): ${JSON.stringify(args.anchor_text)}`
+        );
+      }
+      // Kaiten quirk: documents whose body has never contained annotation
+      // marks reject new ones over REST (500 on object data, silent strip on
+      // string data). Docs that already carry at least one annotation (i.e.
+      // ever commented in the UI) accept new marks fine.
+      const quirkHint =
+        "Kaiten rejects annotation marks added via API to documents that have " +
+        "never had inline comments. Add one comment to the document in the " +
+        "Kaiten UI first, then retry.";
+      try {
+        await kaitenRequest("PATCH", `/documents/${args.document_id}`, {
+          data: pm,
+          sort_order: doc.sort_order ?? 1,
+        });
+      } catch (err) {
+        throw new Error(`Failed to anchor the comment: ${err.message}. ${quirkHint}`);
+      }
+      const after = await kaitenRequest("GET", `/documents/${args.document_id}`);
+      const afterData = typeof after.data === "string" ? after.data : JSON.stringify(after.data);
+      if (!afterData.includes(annId)) {
+        throw new Error(`Annotation mark did not persist. ${quirkHint}`);
+      }
+      return kaitenRequest("POST", `/documents/${args.document_id}/conversations`, {
+        block_uid: annId,
+        text: args.text,
+      });
+    }
 
     // ── Document Groups ──
     case "kaiten_list_document_groups":
